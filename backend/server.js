@@ -1,100 +1,29 @@
-const express = require("express");
-const cors = require("cors");
-const db = require("./database");
+const { loadConfig } = require("./src/config");
+const { createDatabase } = require("./src/database");
+const { createApp } = require("./src/app");
 
-const app = express();
+let config;
+try {
+  config = loadConfig();
+} catch (err) {
+  console.error(`Configuration error: ${err.message}`);
+  process.exit(1);
+}
 
-const PORT = 5000;
+const db = createDatabase(config.dbPath);
+const app = createApp({ db, config });
 
-app.use(cors());
-app.use(express.json());
+const server = app.listen(config.port, () => {
+  console.log(`Task Dashboard API running on http://localhost:${config.port}`);
+});
 
-app.get("/", (req, res) => {
-  res.json({
-    message: "Task Dashboard API is running",
+function shutdown(signal) {
+  console.log(`${signal} received, shutting down`);
+  server.close(() => {
+    db.close();
+    process.exit(0);
   });
-});
+}
 
-app.get("/api/tasks", (req, res) => {
-  const tasks = db.prepare("SELECT * FROM tasks ORDER BY id DESC").all();
-
-  res.json(tasks);
-});
-
-app.post("/api/tasks", (req, res) => {
-  const { title, description, status, priority, dueDate } = req.body;
-
-  const result = db
-    .prepare(
-      `
-        INSERT INTO tasks (title, description, status, priority, dueDate)
-        VALUES (?, ?, ?, ?, ?)
-    `,
-    )
-    .run(
-      title,
-      description,
-      status || "Pending",
-      priority || "Medium",
-      dueDate || null,
-    );
-
-  const newTask = db
-    .prepare("SELECT * FROM tasks WHERE id = ?")
-    .get(result.lastInsertRowid);
-
-  res.status(201).json(newTask);
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
-
-app.put("/api/tasks/:id", (req, res) => {
-  const { id } = req.params;
-  const { title, description, status, priority, dueDate } = req.body;
-
-  const existingTask = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
-
-  if (!existingTask) {
-    return res.status(404).json({
-      message: "Task not found",
-    });
-  }
-
-  db.prepare(
-    `
-        UPDATE tasks
-        SET
-            title = ?,
-            description = ?,
-            status = ?,
-            priority = ?,
-            dueDate = ?,
-            updatedAt = CURRENT_TIMESTAMP
-        WHERE id = ?
-    `,
-  ).run(title, description, status, priority, dueDate, id);
-
-  const updatedTask = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
-
-  res.json(updatedTask);
-});
-
-app.delete("/api/tasks/:id", (req, res) => {
-  const { id } = req.params;
-
-  const existingTask = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
-
-  if (!existingTask) {
-    return res.status(404).json({
-      message: "Task not found",
-    });
-  }
-
-  db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
-
-  res.json({
-    message: "Task deleted successfully",
-  });
-});
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
